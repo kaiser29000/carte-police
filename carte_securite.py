@@ -3,7 +3,7 @@ import pandas as pd
 import plotly.express as px
 import requests
 
-# Configuration de la page (titre de l'onglet et mode plein écran)
+# Configuration de la page
 st.set_page_config(page_title="Radar Sécurité", page_icon="🛡️", layout="wide")
 
 # Le Super Dictionnaire avec 100% des départements
@@ -84,14 +84,13 @@ def recuperer_donnees_securite():
 # EN-TÊTE PRINCIPAL
 st.title("🛡️ Cartographie de la Délinquance en France")
 st.markdown("##### *Analyse officielle des zones à risque pour sécuriser vos chantiers ou informer vos clients.*")
-st.divider() # Une belle ligne de séparation
+st.divider()
 
 with st.spinner("Analyse des archives de la Police Nationale..."):
     df_brut = recuperer_donnees_securite()
 
 if not df_brut.empty:
     
-    # MENU LATÉRAL REVISITÉ
     st.sidebar.title("🎯 Vos Filtres")
     st.sidebar.markdown("Sélectionnez l'infraction et l'année à analyser :")
     
@@ -102,7 +101,6 @@ if not df_brut.empty:
         liste_annees = sorted(df_brut['Annee'].dropna().unique(), reverse=True)
         annee_choisie = st.sidebar.selectbox("Année", liste_annees)
         
-        # Filtrage
         df_filtre = df_brut[(df_brut['indicateur'] == delit_choisi) & (df_brut['Annee'] == annee_choisie)]
         liste_deps_parfaite = [{'Code_departement': k, 'Nom_Departement': v[0], 'Latitude': v[1], 'Longitude': v[2]} for k, v in DEP_DATA.items()]
         df_complet = pd.DataFrame(liste_deps_parfaite)
@@ -110,20 +108,17 @@ if not df_brut.empty:
         df_complet['nombre'] = df_complet['nombre'].fillna(0)
         df_complet = df_complet.sort_values(by='nombre', ascending=False)
         
-        # CALCUL DES INDICATEURS CLÉS (KPIs)
         total_france = int(df_complet['nombre'].sum())
         pire_dep = df_complet.iloc[0]['Nom_Departement']
         pire_chiffre = int(df_complet.iloc[0]['nombre'])
         
-        # AFFICHAGE DES INDICATEURS CLÉS EN HAUT
         col_kpi1, col_kpi2, col_kpi3 = st.columns(3)
         col_kpi1.metric(label="🚨 Total des faits (France)", value=f"{total_france:,}".replace(',', ' '))
         col_kpi2.metric(label="🏆 Département le plus touché", value=f"{pire_dep}")
         col_kpi3.metric(label="📊 Faits dans ce département", value=f"{pire_chiffre:,}".replace(',', ' '))
         
-        st.markdown("<br>", unsafe_allow_html=True) # Petit espace
+        st.markdown("<br>", unsafe_allow_html=True)
         
-        # CARTOGRAPHIE ET GRAPHIQUE
         col1, col2 = st.columns([2, 1]) 
         
         with col1:
@@ -152,12 +147,34 @@ if not df_brut.empty:
             
         st.divider()
         
-        # TABLEAU RANGÉ DANS UN MENU DÉROULANT
+        # --- LA MAGIE EST ICI : LE NOUVEAU TABLEAU ---
         with st.expander("📂 Voir le classement complet des 101 départements"):
-            st.markdown("*Cliquez sur l'en-tête d'une colonne pour trier, ou utilisez la loupe pour chercher un département.*")
-            tableau_final = df_complet[['Nom_Departement', 'Code_departement', 'nombre']].copy()
+            
+            tableau_final = df_complet[['Département', 'Code_departement', 'nombre']].copy() if 'Département' in df_complet.columns else df_complet[['Nom_Departement', 'Code_departement', 'nombre']].copy()
             tableau_final.columns = ['Département', 'Code', 'Nombre de délits']
-            st.dataframe(tableau_final, use_container_width=True)
+            
+            # On cherche le chiffre maximum pour régler la barre de progression
+            max_delits = int(tableau_final['Nombre de délits'].max())
+            
+            # Affichage du tableau Premium
+            st.dataframe(
+                tableau_final,
+                use_container_width=True, # Prend la largeur de la page
+                hide_index=True,          # Cache les numéros de ligne moches
+                height=320,               # Bloque la hauteur pour que ce soit moins "gros"
+                column_config={
+                    "Département": st.column_config.TextColumn("Département 📍", width="medium"),
+                    "Code": st.column_config.TextColumn("Code 🔢", width="small"),
+                    "Nombre de délits": st.column_config.ProgressColumn(
+                        "Volume de délits 🚨", 
+                        help="Barre de progression par rapport au pire département",
+                        format="%d",
+                        min_value=0,
+                        max_value=max_delits,
+                    ),
+                }
+            )
+            st.markdown("*Astuce : Cliquez sur le nom d'une colonne (ex: 'Code') pour trier la liste.*")
 
     else:
         st.error("Erreur de lecture : Colonnes manquantes dans la base de données de l'État.")
