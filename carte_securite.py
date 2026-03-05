@@ -6,7 +6,6 @@ import requests
 # Configuration de la page
 st.set_page_config(page_title="Radar Sécurité", page_icon="🛡️", layout="wide")
 
-# Dictionnaire des départements (Nom, Lat, Lon)
 DEP_DATA = {
     '01': ('Ain', 46.1, 5.3), '02': ('Aisne', 49.6, 3.5), '03': ('Allier', 46.3, 3.2),
     '04': ('Alpes-de-Haute-Provence', 44.1, 6.2), '05': ('Hautes-Alpes', 44.7, 6.1),
@@ -46,7 +45,6 @@ DEP_DATA = {
     '973': ('Guyane', 3.9, -53.1), '974': ('La Réunion', -21.1, 55.5), '976': ('Mayotte', -12.8, 45.2)
 }
 
-# Dictionnaire des populations de l'INSEE (~2023)
 POP_DEP = {
     '01': 652432, '02': 531345, '03': 335975, '04': 164308, '05': 141220, '06': 1094283, '07': 328278, '08': 270582,
     '09': 153287, '10': 310242, '11': 374070, '12': 279649, '13': 2043110, '14': 694002, '15': 144226, '16': 350867,
@@ -88,19 +86,23 @@ def recuperer_donnees_securite():
 
 @st.cache_data(ttl=86400)
 def recuperer_donnees_auteurs():
-    # URL du nouveau jeu de données du SSMSI (Janvier 2026) concernant les caractéristiques des mis en cause
+    # URL du fichier pour la démographie des mis en cause
     api_url = "https://www.data.gouv.fr/api/1/datasets/principales-caracteristiques-des-victimes-enregistrees-et-des-mis-en-cause-pour-des-infractions-elucidees-par-la-police-et-la-gendarmerie-nationales"
     try:
         res = requests.get(api_url).json()
-        csv_url = None
+        xlsx_url = None
         for resource in res.get('resources', []):
-            # On cherche le fichier CSV officiel
-            if resource.get('format', '').lower() == 'csv':
-                csv_url = resource.get('url')
+            titre = resource.get('title', '').lower()
+            format_fichier = resource.get('format', '').lower()
+            # On cherche le fichier Excel qui contient le mot "cause"
+            if 'xlsx' in format_fichier and 'cause' in titre:
+                xlsx_url = resource.get('url')
                 break
-        if not csv_url: return pd.DataFrame()
-        df = pd.read_csv(csv_url, sep=';', low_memory=False)
-        if len(df.columns) == 1: df = pd.read_csv(csv_url, sep=',', low_memory=False)
+                
+        if not xlsx_url: return pd.DataFrame()
+        
+        # On lit le fichier Excel avec openpyxl
+        df = pd.read_excel(xlsx_url, engine='openpyxl')
         return df
     except Exception as e:
         return pd.DataFrame()
@@ -117,18 +119,15 @@ if not df_brut.empty:
     
     # MENU LATÉRAL
     st.sidebar.title("🎯 Vos Filtres")
-    
     liste_delits = sorted(df_brut['indicateur'].dropna().unique())
     delit_choisi = st.sidebar.selectbox("Type d'infraction", liste_delits)
-    
     liste_annees = sorted(df_brut['Annee'].dropna().unique(), reverse=True)
     annee_choisie = st.sidebar.selectbox("Année à analyser", liste_annees)
     
     st.sidebar.markdown("---")
     taux_actif = st.sidebar.checkbox("⚖️ Afficher le vrai taux de dangerosité", value=True, help="Divise le nombre de délits par la population.")
 
-    # CRÉATION DES 3 ONGLETS !
-    tab1, tab2, tab3 = st.tabs(["🌍 Analyse Nationale", "📍 Profil Local", "👤 Profil des Auteurs (NOUVEAU)"])
+    tab1, tab2, tab3 = st.tabs(["🌍 Analyse Nationale", "📍 Profil Local", "👤 Profil des Auteurs"])
     
     # --- ONGLET 1 ---
     with tab1:
@@ -215,16 +214,15 @@ if not df_brut.empty:
             df_auteurs = recuperer_donnees_auteurs()
             
         if not df_auteurs.empty:
-            st.success("Fichier démographique téléchargé avec succès !")
+            st.success("Fichier Excel démographique téléchargé avec succès !")
             st.markdown("Pour l'instant, regardons ensemble les données brutes fournies par la police. **Cherchez la colonne qui parle de la nationalité ou de l'âge dans ce tableau :**")
             
-            # On affiche les 5 premières lignes pour que le développeur (vous) puisse inspecter les colonnes
             st.dataframe(df_auteurs.head(10), use_container_width=True)
             
             st.markdown("---")
             st.markdown("🛠️ **Message pour vous (le développeur) :** Regardez attentivement les en-têtes des colonnes dans le tableau noir ci-dessus. Dites-moi exactement comment s'appellent les colonnes qui concernent la **Nationalité**, le **Sexe**, ou le **nombre de faits**, et je vous coderai immédiatement les superbes graphiques en anneau ! (Exemple: *'nationalite'*, *'tranche_age'*, *'victimes_ou_mis_en_cause'*...).")
         else:
-            st.warning("⚠️ Impossible de télécharger le fichier. L'API est peut-être temporairement indisponible.")
+            st.warning("⚠️ Impossible de lire le fichier Excel. Vérifiez que la librairie 'openpyxl' a bien été ajoutée au fichier requirements.txt sur GitHub et que vous avez relancé l'application (Reboot app).")
 
 else:
-    st.error("Impossible de lire les données de la Police.")
+    st.error("Impossible de lire les données géographiques de la Police.")
