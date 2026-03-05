@@ -88,7 +88,6 @@ def recuperer_donnees_securite():
 
 @st.cache_data(ttl=86400)
 def recuperer_donnees_auteurs():
-    # L'URL du jeu de données du SSMSI
     api_url = "https://www.data.gouv.fr/api/1/datasets/principales-caracteristiques-des-victimes-enregistrees-et-des-mis-en-cause-pour-des-infractions-elucidees-par-la-police-et-la-gendarmerie-nationales"
     try:
         res = requests.get(api_url).json()
@@ -96,15 +95,10 @@ def recuperer_donnees_auteurs():
         for resource in res.get('resources', []):
             url_fichier = resource.get('url', '').lower()
             titre = resource.get('title', '').lower()
-            
-            # On traque le fichier Excel qui contient "cause" ou l'abréviation policière "mec" (Mis En Cause)
             if 'xlsx' in url_fichier and ('mec' in url_fichier or 'cause' in url_fichier or 'mec' in titre or 'cause' in titre):
                 xlsx_url = resource.get('url')
                 break
-                
         if not xlsx_url: return pd.DataFrame()
-        
-        # On lit le fichier Excel avec openpyxl
         df = pd.read_excel(xlsx_url, engine='openpyxl')
         return df
     except Exception as e:
@@ -120,19 +114,44 @@ with st.spinner("Analyse des bases de la Police Nationale..."):
 
 if not df_brut.empty:
     
-    # MENU LATÉRAL
+    # MENU LATÉRAL AMÉLIORÉ AVEC LE FILTRE AGRESSIONS
     st.sidebar.title("🎯 Vos Filtres")
-    liste_delits = sorted(df_brut['indicateur'].dropna().unique())
-    delit_choisi = st.sidebar.selectbox("Type d'infraction", liste_delits)
+    
+    # Le nouveau bouton radio pour filtrer par catégorie
+    categorie = st.sidebar.radio(
+        "Filtrer par catégorie d'infraction :",
+        ["🚨 Toutes les infractions", "🥊 Agressions & Violences", "🏠 Cambriolages", "🚗 Vols de véhicules"]
+    )
+    
+    # On récupère tous les délits disponibles
+    liste_complete = sorted(df_brut['indicateur'].dropna().unique())
+    
+    # On trie la liste en fonction du bouton sélectionné
+    if categorie == "🥊 Agressions & Violences":
+        liste_delits = [d for d in liste_complete if "Coups" in d or "Violences" in d or "Vols violents" in d or "armes" in d]
+        if not liste_delits: liste_delits = liste_complete # Sécurité si aucun mot ne matche
+    elif categorie == "🏠 Cambriolages":
+        liste_delits = [d for d in liste_complete if "Cambriolages" in d]
+        if not liste_delits: liste_delits = liste_complete
+    elif categorie == "🚗 Vols de véhicules":
+        liste_delits = [d for d in liste_complete if "véhicule" in d.lower() or "voiture" in d.lower()]
+        if not liste_delits: liste_delits = liste_complete
+    else:
+        liste_delits = liste_complete
+    
+    # La liste déroulante s'adapte automatiquement à la catégorie !
+    delit_choisi = st.sidebar.selectbox("Type d'infraction précis", liste_delits)
+    
     liste_annees = sorted(df_brut['Annee'].dropna().unique(), reverse=True)
     annee_choisie = st.sidebar.selectbox("Année à analyser", liste_annees)
     
     st.sidebar.markdown("---")
-    taux_actif = st.sidebar.checkbox("⚖️ Afficher le vrai taux de dangerosité", value=True, help="Divise le nombre de délits par la population.")
+    taux_actif = st.sidebar.checkbox("⚖️ Afficher le vrai taux de dangerosité", value=True, help="Divise le nombre de délits par la population (Pour 1000 habitants).")
 
+    # ONGLETS
     tab1, tab2, tab3 = st.tabs(["🌍 Analyse Nationale", "📍 Profil Local", "👤 Profil des Auteurs"])
     
-    # --- ONGLET 1 ---
+    # --- ONGLET 1 : ANALYSE NATIONALE ---
     with tab1:
         df_filtre = df_brut[(df_brut['indicateur'] == delit_choisi) & (df_brut['Annee'] == annee_choisie)]
         liste_deps = [{'Code_departement': k, 'Nom_Departement': v[0], 'Latitude': v[1], 'Longitude': v[2]} for k, v in DEP_DATA.items()]
@@ -186,7 +205,7 @@ if not df_brut.empty:
                                unite: st.column_config.ProgressColumn(unite, format="%.2f", min_value=0, max_value=float(tableau_final[unite].max()))}
             )
 
-    # --- ONGLET 2 ---
+    # --- ONGLET 2 : PROFIL LOCAL ---
     with tab2:
         st.markdown("### 🔍 Profil de Délinquance Départemental")
         liste_noms_deps = [f"{k} - {v[0]}" for k, v in DEP_DATA.items()]
@@ -220,7 +239,6 @@ if not df_brut.empty:
             st.success("Fichier Excel démographique téléchargé avec succès !")
             st.markdown("Pour l'instant, regardons ensemble les données brutes fournies par la police. **Cherchez les colonnes qui parlent de la nationalité, de l'âge ou du sexe dans ce tableau :**")
             
-            # On affiche les premières lignes pour que vous puissiez inspecter les colonnes
             st.dataframe(df_auteurs.head(15), use_container_width=True)
             
             st.markdown("---")
