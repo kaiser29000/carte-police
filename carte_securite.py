@@ -67,29 +67,43 @@ POP_DEP = {
 def recuperer_donnees_securite():
     api_url = "https://www.data.gouv.fr/api/1/datasets/bases-statistiques-communale-departementale-et-regionale-de-la-delinquance-enregistree-par-la-police-et-la-gendarmerie-nationales/"
     res = requests.get(api_url).json()
-    
     csv_url = None
     for resource in res.get('resources', []):
         if 'DEP' in resource.get('title', '').upper() and resource.get('format', '').lower() == 'csv':
             csv_url = resource.get('url')
             break
     if not csv_url: return pd.DataFrame()
-        
     df = pd.read_csv(csv_url, sep=';', low_memory=False)
     if len(df.columns) == 1: df = pd.read_csv(csv_url, sep=',', low_memory=False)
     df.columns = df.columns.str.strip()
-    
     if 'annee' in df.columns: df.rename(columns={'annee': 'Annee'}, inplace=True)
     elif 'année' in df.columns: df.rename(columns={'année': 'Annee'}, inplace=True)
     elif 'Année' in df.columns: df.rename(columns={'Année': 'Annee'}, inplace=True)
-        
     if 'Code_departement' in df.columns:
         df['Code_departement'] = df['Code_departement'].astype(str).str.replace(r'\.0$', '', regex=True).str.strip().str.zfill(2)
-    
     if 'nombre' in df.columns:
         df['nombre'] = df['nombre'].astype(str).str.replace(r'\s+', '', regex=True).str.replace(',', '.')
         df['nombre'] = pd.to_numeric(df['nombre'], errors='coerce') 
     return df
+
+@st.cache_data(ttl=86400)
+def recuperer_donnees_auteurs():
+    # URL du nouveau jeu de données du SSMSI (Janvier 2026) concernant les caractéristiques des mis en cause
+    api_url = "https://www.data.gouv.fr/api/1/datasets/principales-caracteristiques-des-victimes-enregistrees-et-des-mis-en-cause-pour-des-infractions-elucidees-par-la-police-et-la-gendarmerie-nationales"
+    try:
+        res = requests.get(api_url).json()
+        csv_url = None
+        for resource in res.get('resources', []):
+            # On cherche le fichier CSV officiel
+            if resource.get('format', '').lower() == 'csv':
+                csv_url = resource.get('url')
+                break
+        if not csv_url: return pd.DataFrame()
+        df = pd.read_csv(csv_url, sep=';', low_memory=False)
+        if len(df.columns) == 1: df = pd.read_csv(csv_url, sep=',', low_memory=False)
+        return df
+    except Exception as e:
+        return pd.DataFrame()
 
 # EN-TÊTE PRINCIPAL
 st.title("🛡️ Tableau de Bord Sécurité & Délinquance")
@@ -111,24 +125,19 @@ if not df_brut.empty:
     annee_choisie = st.sidebar.selectbox("Année à analyser", liste_annees)
     
     st.sidebar.markdown("---")
-    # LE NOUVEAU BOUTON : Le Taux de dangerosité !
-    taux_actif = st.sidebar.checkbox("⚖️ Afficher le vrai taux de dangerosité", value=True, help="Divise le nombre de délits par la population pour afficher les faits pour 1000 habitants (Évite de pénaliser les grands départements).")
+    taux_actif = st.sidebar.checkbox("⚖️ Afficher le vrai taux de dangerosité", value=True, help="Divise le nombre de délits par la population.")
 
-    # CRÉATION DES ONGLETS !
-    tab1, tab2 = st.tabs(["🌍 Analyse Nationale", "📍 Profil Local (Département)"])
+    # CRÉATION DES 3 ONGLETS !
+    tab1, tab2, tab3 = st.tabs(["🌍 Analyse Nationale", "📍 Profil Local", "👤 Profil des Auteurs (NOUVEAU)"])
     
-    # ---------------------------------------------------------
-    # ONGLET 1 : ANALYSE NATIONALE
-    # ---------------------------------------------------------
+    # --- ONGLET 1 ---
     with tab1:
-        # Préparation des données pour la carte
         df_filtre = df_brut[(df_brut['indicateur'] == delit_choisi) & (df_brut['Annee'] == annee_choisie)]
         liste_deps = [{'Code_departement': k, 'Nom_Departement': v[0], 'Latitude': v[1], 'Longitude': v[2]} for k, v in DEP_DATA.items()]
         df_complet = pd.DataFrame(liste_deps)
         df_complet = pd.merge(df_complet, df_filtre[['Code_departement', 'nombre']], on='Code_departement', how='left')
         df_complet['nombre'] = df_complet['nombre'].fillna(0)
         
-        # Calcul du Taux si demandé
         if taux_actif:
             df_complet['Valeur_Affichee'] = df_complet.apply(lambda row: round((row['nombre'] / POP_DEP.get(row['Code_departement'], 1)) * 1000, 2), axis=1)
             unite = "Faits pour 1000 hab."
@@ -138,29 +147,12 @@ if not df_brut.empty:
             
         df_complet = df_complet.sort_values(by='Valeur_Affichee', ascending=False)
         
-        # KPIs
-        total_france = int(df_complet['nombre'].sum())
-        pire_dep = df_complet.iloc[0]['Nom_Departement']
-        pire_chiffre = df_complet.iloc[0]['Valeur_Affichee']
-        
-        col_kpi1, col_kpi2, col_kpi3 = st.columns(3)
-        col_kpi1.metric(label=f"🚨 Total France ({annee_choisie})", value=f"{total_france:,}".replace(',', ' '))
-        col_kpi2.metric(label="🏆 Département le plus touché", value=f"{pire_dep}")
-        col_kpi3.metric(label=f"📊 {unite} (Pire Dép.)", value=f"{pire_chiffre:,}".replace(',', ' '))
-        
-        st.markdown("<br>", unsafe_allow_html=True)
-        
-        # Ligne 1 : Carte + Top 15
         col1, col2 = st.columns([2, 1]) 
         with col1:
             st.markdown(f"**📍 Carte de France : {delit_choisi}**")
             fig_map = px.scatter_mapbox(
-                df_complet, lat="Latitude", lon="Longitude", 
-                color="Valeur_Affichee", size="Valeur_Affichee",
-                color_continuous_scale=px.colors.sequential.YlOrRd,
-                hover_name="Nom_Departement",
-                hover_data={"Valeur_Affichee": True, "Code_departement": True, "Latitude": False, "Longitude": False},
-                labels={"Valeur_Affichee": unite},
+                df_complet, lat="Latitude", lon="Longitude", color="Valeur_Affichee", size="Valeur_Affichee",
+                color_continuous_scale=px.colors.sequential.YlOrRd, hover_name="Nom_Departement",
                 zoom=4.5, mapbox_style="carto-positron"
             )
             fig_map.update_layout(margin={"r":0,"t":0,"l":0,"b":0})
@@ -169,16 +161,12 @@ if not df_brut.empty:
         with col2:
             st.markdown("**📈 Top 15 des départements**")
             fig_bar = px.bar(
-                df_complet.head(15), 
-                x='Valeur_Affichee', y='Nom_Departement', 
-                orientation='h',
-                color='Valeur_Affichee', color_continuous_scale=px.colors.sequential.YlOrRd,
-                labels={"Valeur_Affichee": unite, "Nom_Departement": ""}
+                df_complet.head(15), x='Valeur_Affichee', y='Nom_Departement', orientation='h',
+                color='Valeur_Affichee', color_continuous_scale=px.colors.sequential.YlOrRd
             )
             fig_bar.update_layout(yaxis={'categoryorder':'total ascending'}, margin={"r":0,"t":0,"l":0,"b":0})
             st.plotly_chart(fig_bar, use_container_width=True)
             
-        # Ligne 2 : L'évolution dans le temps (Tendance globale)
         st.markdown("---")
         st.markdown(f"**📉 Évolution de la délinquance en France : {delit_choisi} (2016 à aujourd'hui)**")
         df_tendance = df_brut[df_brut['indicateur'] == delit_choisi].groupby('Annee')['nombre'].sum().reset_index()
@@ -186,7 +174,6 @@ if not df_brut.empty:
         fig_line.update_layout(xaxis_title="Année", yaxis_title="Nombre total de délits (France)", margin={"r":0,"t":10,"l":0,"b":0})
         st.plotly_chart(fig_line, use_container_width=True)
 
-        # Tableau
         with st.expander("📂 Voir le classement complet des 101 départements"):
             tableau_final = df_complet[['Nom_Departement', 'Code_departement', 'Valeur_Affichee']].copy()
             tableau_final.columns = ['Département', 'Code', unite]
@@ -197,38 +184,47 @@ if not df_brut.empty:
                                unite: st.column_config.ProgressColumn(unite, format="%.2f", min_value=0, max_value=float(tableau_final[unite].max()))}
             )
 
-    # ---------------------------------------------------------
-    # ONGLET 2 : LE PROFIL LOCAL (Département spécifique)
-    # ---------------------------------------------------------
+    # --- ONGLET 2 ---
     with tab2:
         st.markdown("### 🔍 Profil de Délinquance Départemental")
-        
-        # On prépare une liste propre pour le menu déroulant ("01 - Ain", "75 - Paris")
         liste_noms_deps = [f"{k} - {v[0]}" for k, v in DEP_DATA.items()]
         dep_choisi = st.selectbox("Choisissez le département de votre client/chantier :", liste_noms_deps, index=liste_noms_deps.index("75 - Paris"))
         code_dep_choisi = dep_choisi.split(" - ")[0]
         nom_dep_choisi = dep_choisi.split(" - ")[1]
         
         st.markdown(f"#### Rapport de sécurité pour : **{nom_dep_choisi} ({code_dep_choisi})** en {annee_choisie}")
-        
-        # On filtre les données brutes juste pour ce département et cette année
         df_dep = df_brut[(df_brut['Code_departement'] == code_dep_choisi) & (df_brut['Annee'] == annee_choisie)]
         
         if not df_dep.empty:
-            total_dep = df_dep['nombre'].sum()
-            st.metric(label=f"🚨 Total des infractions recensées dans le {code_dep_choisi} en {annee_choisie}", value=f"{int(total_dep):,}".replace(',', ' '))
-            
-            # Le "Camembert" des risques !
             col_pie, col_empty = st.columns([2, 1])
             with col_pie:
                 st.markdown("**Quels sont les délits les plus fréquents ici ?**")
-                # On trie pour ne garder que le top 10 des délits (pour que le camembert soit lisible)
                 df_dep_top = df_dep.sort_values(by='nombre', ascending=False).head(10)
                 fig_pie = px.pie(df_dep_top, values='nombre', names='indicateur', hole=0.4, color_discrete_sequence=px.colors.sequential.RdBu)
                 fig_pie.update_layout(margin={"r":0,"t":0,"l":0,"b":0})
                 st.plotly_chart(fig_pie, use_container_width=True)
         else:
             st.info(f"Aucune donnée enregistrée pour le {code_dep_choisi} en {annee_choisie}.")
+
+    # --- ONGLET 3 : DEMOGRAPHIE ---
+    with tab3:
+        st.markdown("### 👤 Qui sont les auteurs présumés ? (Données Nationales)")
+        st.info("💡 Ces données proviennent du tout nouveau fichier du SSMSI recensant les caractéristiques des personnes mises en cause.")
+        
+        with st.spinner("Téléchargement de la base de données démographique depuis data.gouv.fr..."):
+            df_auteurs = recuperer_donnees_auteurs()
+            
+        if not df_auteurs.empty:
+            st.success("Fichier démographique téléchargé avec succès !")
+            st.markdown("Pour l'instant, regardons ensemble les données brutes fournies par la police. **Cherchez la colonne qui parle de la nationalité ou de l'âge dans ce tableau :**")
+            
+            # On affiche les 5 premières lignes pour que le développeur (vous) puisse inspecter les colonnes
+            st.dataframe(df_auteurs.head(10), use_container_width=True)
+            
+            st.markdown("---")
+            st.markdown("🛠️ **Message pour vous (le développeur) :** Regardez attentivement les en-têtes des colonnes dans le tableau noir ci-dessus. Dites-moi exactement comment s'appellent les colonnes qui concernent la **Nationalité**, le **Sexe**, ou le **nombre de faits**, et je vous coderai immédiatement les superbes graphiques en anneau ! (Exemple: *'nationalite'*, *'tranche_age'*, *'victimes_ou_mis_en_cause'*...).")
+        else:
+            st.warning("⚠️ Impossible de télécharger le fichier. L'API est peut-être temporairement indisponible.")
 
 else:
     st.error("Impossible de lire les données de la Police.")
