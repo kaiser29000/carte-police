@@ -3,9 +3,8 @@ import pandas as pd
 import plotly.express as px
 import requests
 
-st.set_page_config(page_title="Radar Sécurité", layout="wide")
-st.title("🛡️ Cartographie de la Délinquance en France")
-st.write("Analyse les zones à risque pour sécuriser tes chantiers ou rassurer les clients de tes gîtes.")
+# Configuration de la page (titre de l'onglet et mode plein écran)
+st.set_page_config(page_title="Radar Sécurité", page_icon="🛡️", layout="wide")
 
 # Le Super Dictionnaire avec 100% des départements
 DEP_DATA = {
@@ -82,45 +81,53 @@ def recuperer_donnees_securite():
         
     return df
 
-with st.spinner("Analyse des archives et création de la carte..."):
+# EN-TÊTE PRINCIPAL
+st.title("🛡️ Cartographie de la Délinquance en France")
+st.markdown("##### *Analyse officielle des zones à risque pour sécuriser vos chantiers ou informer vos clients.*")
+st.divider() # Une belle ligne de séparation
+
+with st.spinner("Analyse des archives de la Police Nationale..."):
     df_brut = recuperer_donnees_securite()
 
 if not df_brut.empty:
-    st.sidebar.header("🎯 Tes Filtres de Sécurité")
+    
+    # MENU LATÉRAL REVISITÉ
+    st.sidebar.title("🎯 Vos Filtres")
+    st.sidebar.markdown("Sélectionnez l'infraction et l'année à analyser :")
     
     if 'indicateur' in df_brut.columns and 'Annee' in df_brut.columns and 'nombre' in df_brut.columns:
         liste_delits = sorted(df_brut['indicateur'].dropna().unique())
-        delit_choisi = st.sidebar.selectbox("1. Type d'infraction", liste_delits)
+        delit_choisi = st.sidebar.selectbox("Type d'infraction", liste_delits)
         
         liste_annees = sorted(df_brut['Annee'].dropna().unique(), reverse=True)
-        annee_choisie = st.sidebar.selectbox("2. Année", liste_annees)
+        annee_choisie = st.sidebar.selectbox("Année", liste_annees)
         
-        # 1. On isole l'infraction et l'année demandée
+        # Filtrage
         df_filtre = df_brut[(df_brut['indicateur'] == delit_choisi) & (df_brut['Annee'] == annee_choisie)]
-        
-        # 2. LA MAGIE ICI : On crée la liste parfaite des 101 départements
         liste_deps_parfaite = [{'Code_departement': k, 'Nom_Departement': v[0], 'Latitude': v[1], 'Longitude': v[2]} for k, v in DEP_DATA.items()]
         df_complet = pd.DataFrame(liste_deps_parfaite)
-        
-        # 3. On colle les données de la police sur notre liste parfaite. 
-        # Si la police n'a rien mis, ça mettra du vide.
         df_complet = pd.merge(df_complet, df_filtre[['Code_departement', 'nombre']], on='Code_departement', how='left')
-        
-        # 4. On remplace le vide par des Zéros (0) pour garantir que tout s'affiche
         df_complet['nombre'] = df_complet['nombre'].fillna(0)
-        
-        # 5. On trie le tableau du plus dangereux au moins dangereux
         df_complet = df_complet.sort_values(by='nombre', ascending=False)
         
-        # Affichage
-        st.write(f"### 📍 Carte des infractions : {delit_choisi} (Année {annee_choisie})")
-        st.write("*Plus le cercle est grand et rouge, plus le **nombre total** de faits enregistrés est élevé.*")
+        # CALCUL DES INDICATEURS CLÉS (KPIs)
+        total_france = int(df_complet['nombre'].sum())
+        pire_dep = df_complet.iloc[0]['Nom_Departement']
+        pire_chiffre = int(df_complet.iloc[0]['nombre'])
         
-        # Colonnes pour organiser l'écran
-        col1, col2 = st.columns([2, 1]) # La carte prend 2/3 de l'espace, le graphe 1/3
+        # AFFICHAGE DES INDICATEURS CLÉS EN HAUT
+        col_kpi1, col_kpi2, col_kpi3 = st.columns(3)
+        col_kpi1.metric(label="🚨 Total des faits (France)", value=f"{total_france:,}".replace(',', ' '))
+        col_kpi2.metric(label="🏆 Département le plus touché", value=f"{pire_dep}")
+        col_kpi3.metric(label="📊 Faits dans ce département", value=f"{pire_chiffre:,}".replace(',', ' '))
+        
+        st.markdown("<br>", unsafe_allow_html=True) # Petit espace
+        
+        # CARTOGRAPHIE ET GRAPHIQUE
+        col1, col2 = st.columns([2, 1]) 
         
         with col1:
-            # La carte (garantie sans erreur car les 101 points sont toujours là)
+            st.markdown(f"**📍 Carte de France : {delit_choisi} ({annee_choisie})**")
             fig_map = px.scatter_mapbox(
                 df_complet, lat="Latitude", lon="Longitude", 
                 color="nombre", size="nombre",
@@ -133,29 +140,26 @@ if not df_brut.empty:
             st.plotly_chart(fig_map, use_container_width=True)
 
         with col2:
-            # Le petit graphique pour les 20 pires départements (pour que ce soit lisible)
-            st.write("📈 **Top 20 des départements touchés**")
+            st.markdown("**📈 Top 15 des départements**")
             fig_bar = px.bar(
-                df_complet.head(20), 
+                df_complet.head(15), 
                 x='nombre', y='Nom_Departement', 
-                orientation='h', # barres horizontales
+                orientation='h',
                 color='nombre', color_continuous_scale=px.colors.sequential.YlOrRd
             )
             fig_bar.update_layout(yaxis={'categoryorder':'total ascending'}, margin={"r":0,"t":0,"l":0,"b":0})
             st.plotly_chart(fig_bar, use_container_width=True)
             
-        st.write("---")
-        st.write("### 📜 L'intégralité des 101 départements français")
-        st.write("*Faites défiler le tableau vers le bas ou utilisez la loupe en haut à droite pour chercher un département spécifique.*")
+        st.divider()
         
-        # On prépare le grand tableau pour l'affichage final
-        tableau_final = df_complet[['Nom_Departement', 'Code_departement', 'nombre']].copy()
-        tableau_final.columns = ['Département', 'Code', 'Nombre de délits']
-        
-        # On affiche le tableau COMPLET
-        st.dataframe(tableau_final, use_container_width=True, height=400)
+        # TABLEAU RANGÉ DANS UN MENU DÉROULANT
+        with st.expander("📂 Voir le classement complet des 101 départements"):
+            st.markdown("*Cliquez sur l'en-tête d'une colonne pour trier, ou utilisez la loupe pour chercher un département.*")
+            tableau_final = df_complet[['Nom_Departement', 'Code_departement', 'nombre']].copy()
+            tableau_final.columns = ['Département', 'Code', 'Nombre de délits']
+            st.dataframe(tableau_final, use_container_width=True)
 
     else:
         st.error("Erreur de lecture : Colonnes manquantes dans la base de données de l'État.")
 else:
-    st.error("Impossible de lire les données.")
+    st.error("Impossible de lire les données. L'API gouvernementale est peut-être hors-ligne.")
