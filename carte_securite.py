@@ -6,6 +6,7 @@ import requests
 # Configuration de la page
 st.set_page_config(page_title="Radar Sécurité", page_icon="🛡️", layout="wide")
 
+# Dictionnaire des départements (Nom, Lat, Lon)
 DEP_DATA = {
     '01': ('Ain', 46.1, 5.3), '02': ('Aisne', 49.6, 3.5), '03': ('Allier', 46.3, 3.2),
     '04': ('Alpes-de-Haute-Provence', 44.1, 6.2), '05': ('Hautes-Alpes', 44.7, 6.1),
@@ -45,6 +46,7 @@ DEP_DATA = {
     '973': ('Guyane', 3.9, -53.1), '974': ('La Réunion', -21.1, 55.5), '976': ('Mayotte', -12.8, 45.2)
 }
 
+# Dictionnaire des populations
 POP_DEP = {
     '01': 652432, '02': 531345, '03': 335975, '04': 164308, '05': 141220, '06': 1094283, '07': 328278, '08': 270582,
     '09': 153287, '10': 310242, '11': 374070, '12': 279649, '13': 2043110, '14': 694002, '15': 144226, '16': 350867,
@@ -86,16 +88,17 @@ def recuperer_donnees_securite():
 
 @st.cache_data(ttl=86400)
 def recuperer_donnees_auteurs():
-    # URL du fichier pour la démographie des mis en cause
+    # L'URL du jeu de données du SSMSI
     api_url = "https://www.data.gouv.fr/api/1/datasets/principales-caracteristiques-des-victimes-enregistrees-et-des-mis-en-cause-pour-des-infractions-elucidees-par-la-police-et-la-gendarmerie-nationales"
     try:
         res = requests.get(api_url).json()
         xlsx_url = None
         for resource in res.get('resources', []):
+            url_fichier = resource.get('url', '').lower()
             titre = resource.get('title', '').lower()
-            format_fichier = resource.get('format', '').lower()
-            # On cherche le fichier Excel qui contient le mot "cause"
-            if 'xlsx' in format_fichier and 'cause' in titre:
+            
+            # On traque le fichier Excel qui contient "cause" ou l'abréviation policière "mec" (Mis En Cause)
+            if 'xlsx' in url_fichier and ('mec' in url_fichier or 'cause' in url_fichier or 'mec' in titre or 'cause' in titre):
                 xlsx_url = resource.get('url')
                 break
                 
@@ -215,12 +218,13 @@ if not df_brut.empty:
             
         if not df_auteurs.empty:
             st.success("Fichier Excel démographique téléchargé avec succès !")
-            st.markdown("Pour l'instant, regardons ensemble les données brutes fournies par la police. **Cherchez la colonne qui parle de la nationalité ou de l'âge dans ce tableau :**")
+            st.markdown("Pour l'instant, regardons ensemble les données brutes fournies par la police. **Cherchez les colonnes qui parlent de la nationalité, de l'âge ou du sexe dans ce tableau :**")
             
-            st.dataframe(df_auteurs.head(10), use_container_width=True)
+            # On affiche les premières lignes pour que vous puissiez inspecter les colonnes
+            st.dataframe(df_auteurs.head(15), use_container_width=True)
             
             st.markdown("---")
-            st.markdown("🛠️ **Message pour vous (le développeur) :** Regardez attentivement les en-têtes des colonnes dans le tableau noir ci-dessus. Dites-moi exactement comment s'appellent les colonnes qui concernent la **Nationalité**, le **Sexe**, ou le **nombre de faits**, et je vous coderai immédiatement les superbes graphiques en anneau ! (Exemple: *'nationalite'*, *'tranche_age'*, *'victimes_ou_mis_en_cause'*...).")
+            st.markdown("🛠️ **Message pour vous (le développeur) :** Regardez attentivement les en-têtes des colonnes dans le tableau noir ci-dessus. Dites-moi exactement comment s'appellent les colonnes qui concernent la **Nationalité**, le **Sexe**, ou le **nombre de faits**, et je vous coderai immédiatement les superbes graphiques en anneau ! (Exemples: *'nationalite'*, *'tranche_age'*, *'nb_mis_en_cause'*...).")
         else:
             st.warning("⚠️ Impossible de lire le fichier Excel. Vérifiez que la librairie 'openpyxl' a bien été ajoutée au fichier requirements.txt sur GitHub et que vous avez relancé l'application (Reboot app).")
 
